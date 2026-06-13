@@ -1,0 +1,550 @@
+'use client';
+import dynamic from "next/dynamic";
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  GetAllPageList,
+  UpdatePageStatus,
+  SwitchProject,
+  GetTags,
+  GetFixedTags,
+  SaveTimeStamps
+} from '../wailsjs/go/main/App';
+
+type TimeStamp = {
+  label: string;
+  time: number;
+};
+
+type PageHeader = {
+  id: string;
+  title: string;
+  url: string;
+  categoryId: number;
+  statusId: number;
+  sortId: number;
+  tags: string[];
+  thumbnailUrl: string;
+  timeStamps?: TimeStamp[];
+};
+
+type ViewMode = 'MAIN_LIST' | 'DETAIL' | 'TAG_LIST';
+type SearchMode = 'TITLE' | 'TAG';
+type SortMode =
+  | 'NEWEST'
+  | 'OLDEST'
+  | 'TITLE_ASC'
+  | 'TITLE_DESC'
+  | 'RANDOM';
+
+type HistoryState = {
+  viewMode: ViewMode;
+  selectedPage: PageHeader | null;
+  selectedTag: string | null;
+  selectedStatus: number | null;
+  project: string;
+};
+
+const STATUS_MAP: { [key: number]: { label: string; color: string; border: string; bg: string } } = {
+  0: { label: '未試聴', color: 'text-gray-400', border: 'border-gray-500', bg: 'bg-gray-500/10' },
+  1: { label: '登録予定', color: 'text-blue-400', border: 'border-blue-400', bg: 'bg-blue-400/10' },
+  2: { label: '削除予定', color: 'text-red-400', border: 'border-red-400', bg: 'bg-red-400/10' },
+  3: { label: '登録済', color: 'text-green-400', border: 'border-green-400', bg: 'bg-green-400/10' },
+};
+
+const TwitterEmbed = dynamic(() => import("./TwitterEmbed"), {
+  ssr: false,
+});
+
+const kanaList = [
+  "あ",
+  "か",
+  "さ",
+  "た",
+  "な",
+  "は",
+  "ま",
+  "や",
+  "ら",
+  "わ",
+];
+
+// ─── 追加・修正：プロキシ経由で動画を再生する専用のクリーンなコンポーネント ───
+// ※ルール違反を避けるため、Homeの外側に配置し独立させました。
+const VideoPlayer = ({ url }: { url: string }) => {
+  return (
+    <FullscreenContainer
+      className="
+        aspect-video
+        w-full
+        overflow-hidden
+        rounded-md
+        shadow-lg
+        border
+        border-[#4f5764]
+        bg-[#141619]
+        flex
+        items-center
+        justify-center
+      "
+    >
+      <video
+        controls
+        className="w-full h-full object-contain bg-black"
+        src={`http://localhost:54321/video?url=${encodeURIComponent(url)}`}
+      />
+    </FullscreenContainer>
+  );
+};
+
+const FullscreenContainer = ({
+  children,
+  className = '',
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) => {
+  const containerRef =
+    useRef<HTMLDivElement>(null);
+
+  const handleFullscreen =
+    useCallback(async () => {
+      const el =
+        containerRef.current;
+
+      if (!el) return;
+
+      try {
+        if (
+          document.fullscreenElement
+        ) {
+          await document.exitFullscreen();
+        } else {
+          await el.requestFullscreen();
+        }
+      } catch (err) {
+        console.error(
+          'fullscreen error',
+          err
+        );
+      }
+    }, []);
+
+  // ← 追加
+  useEffect(() => {
+    const handleKeyDown = (
+      e: KeyboardEvent
+    ) => {
+      // 入力中は無効
+      const target =
+        e.target as HTMLElement;
+
+      const isTyping =
+        target.tagName === 'INPUT' ||
+        target.tagName ===
+          'TEXTAREA' ||
+        target.isContentEditable;
+
+      if (isTyping) return;
+
+      // Ctrl+Fは無視
+      if (
+        e.ctrlKey ||
+        e.metaKey ||
+        e.altKey
+      ) {
+        return;
+      }
+
+      if (
+        e.key.toLowerCase() ===
+        'f'
+      ) {
+        e.preventDefault();
+        handleFullscreen();
+      }
+    };
+
+    window.addEventListener(
+      'keydown',
+      handleKeyDown
+    );
+
+    return () =>
+      window.removeEventListener(
+        'keydown',
+        handleKeyDown
+      );
+  }, [handleFullscreen]);
+
+  return (
+    <div className="relative">
+      <button
+        onClick={handleFullscreen}
+        className="
+          absolute
+          top-2
+          left-2
+          z-20
+          px-3
+          py-1
+          text-xs
+          rounded-md
+          bg-black/70
+          text-white
+          border
+          border-gray-500
+          hover:bg-black
+        "
+      >
+        ⛶ 全画面 (F)
+      </button>
+
+      <div
+        ref={containerRef}
+        className={className}
+      >
+        {children}
+      </div>
+    </div>
+  );
+};
+
+type Tag = {
+  name: string;
+  yomi: string;
+  group: string;
+};
+
+timeStamps: [
+  {
+    label: "イントロ",
+    time: 15,
+  },
+  {
+    label: "サビ",
+    time: 83,
+  },
+]
+
+function parseTimeToSeconds(
+  value: string,
+): number {
+  const parts =
+    value.split(":").map(Number);
+
+  if (parts.length === 2) {
+    return parts[0] * 60 + parts[1];
+  }
+
+  if (parts.length === 3) {
+    return (
+      parts[0] * 3600 +
+      parts[1] * 60 +
+      parts[2]
+    );
+  }
+
+  return 0;
+}
+
+function handleAddTimestamp() {
+  if (!selectedPage) return;
+
+  const label =
+    newTimestampLabel.trim();
+
+  if (!label) return;
+
+  const sec =
+    parseTimeToSeconds(
+      newTimestampTime,
+    );
+
+  setSelectedPage({
+    ...selectedPage,
+    timeStamps: [
+      ...(selectedPage.timeStamps ?? []),
+      {
+        label,
+        time: sec,
+      },
+    ],
+  });
+
+  setNewTimestampLabel("");
+  setNewTimestampTime("");
+}
+
+function handleDeleteTimestamp(
+  index: number,
+) {
+  if (!selectedPage) return;
+
+  setSelectedPage({
+    ...selectedPage,
+    timeStamps:
+      (
+        selectedPage.timeStamps ??
+        []
+      ).filter(
+        (_, i) => i !== index,
+      ),
+  });
+}
+
+export default function Home() {
+  const [fixedCategories, setFixedCategories] =
+    useState<string[]>([]);
+  const [groupedTags, setGroupedTags] =
+    useState<Record<string, Tag[]>>({});
+  const [allProjectPages, setAllProjectPages] = useState<PageHeader[]>([]); 
+  const [filteredPages, setFilteredPages] = useState<PageHeader[]>([]);   
+  const [displayedPages, setDisplayedPages] = useState<PageHeader[]>([]);  
+
+  const [viewMode, setViewMode] = useState<ViewMode>('MAIN_LIST');
+  const [newTimestampLabel, setNewTimestampLabel] =
+    useState("");
+  const [newTimestampTime, setNewTimestampTime] =
+    useState("");
+  const [selectedPage, setSelectedPage] = useState<PageHeader | null>(null);
+  const [isFading, setIsFading] = useState(false);
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [selectedStatus, setSelectedStatus] = useState<number | null>(null);
+  const [currentProject, setCurrentProject] = useState<string>('mx-music');
+  const [isVideoLoaded, setIsVideoLoaded] = useState<boolean>(false);
+
+  const [isSearchOpen, setIsSearchOpen] = useState<boolean>(false);
+  const [searchMode, setSearchMode] = useState<SearchMode>('TITLE');
+  const [sortMode, setSortMode] =
+  useState<SortMode>('NEWEST');
+
+  const [randomOrder, setRandomOrder] =
+  useState<string[]>([]);
+
+  const [searchQuery, setSearchQuery] =
+    useState<string>(''); // 入力中テキスト
+
+  const [appliedTitleSearch, setAppliedTitleSearch] =
+    useState<string>(''); // Enter確定済み検索
+
+  const searchInputRef =
+    useRef<HTMLInputElement>(null);
+
+  const [uniqueTags, setUniqueTags] = useState<string[]>([]);
+  const [tagCounts, setTagCounts] = useState<{ [key: string]: number }>({});
+
+  const [isSelectMode, setIsSelectMode] = useState<boolean>(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+
+  const [history, setHistory] = useState<HistoryState[]>([
+    { viewMode: 'MAIN_LIST', selectedPage: null, selectedTag: null, selectedStatus: null, project: 'mx-music' }
+  ]);
+  const [historyIndex, setHistoryIndex] = useState<number>(0);
+
+  const listScrollPositions = useRef<{ [key: string]: number }>({});
+  const detailScrollPositions = useRef<{ [key: number]: number }>({});
+
+  const [displayCount, setDisplayCount] = useState<number>(100);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+
+  const stateRef = useRef({ viewMode, selectedPage, selectedTag, selectedStatus, currentProject, historyIndex, history });
+  const handlersRef = useRef({
+    executeGoBack: () => {},
+    executeGoForward: () => {}
+  });
+
+  const shuffleArray = <T,>(array: T[]) => {
+    const arr = [...array];
+
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(
+        Math.random() * (i + 1)
+      );
+
+      [arr[i], arr[j]] =
+        [arr[j], arr[i]];
+    }
+
+    return arr;
+  };
+
+  useEffect(() => {
+    const loadTags = async () => {
+      try {
+        const tags = (await GetTags()) ?? [];
+        const fixed = await GetFixedTags();
+
+        setFixedCategories(fixed ?? []);
+
+        const grouped =
+          tags.reduce((acc, tag) => {
+            if (!acc[tag.group]) {
+              acc[tag.group] = [];
+            }
+
+            acc[tag.group].push(tag);
+
+            return acc;
+          }, {} as Record<string, Tag[]>);
+
+        setGroupedTags(grouped);
+      } catch (err) {
+        console.error(
+          "タグ取得失敗",
+          err
+        );
+      }
+    };
+
+    loadTags();
+  }, [currentProject]);
+
+  useEffect(() => {
+    stateRef.current = { viewMode, selectedPage, selectedTag, selectedStatus, currentProject, historyIndex, history };
+  });
+
+  useEffect(() => {
+    loadProjectAllPages();
+  }, []);
+
+  useEffect(() => {
+    const handleCloseMenu = () => setContextMenu(null);
+    window.addEventListener('click', handleCloseMenu);
+    return () => window.removeEventListener('click', handleCloseMenu);
+  }, []);
+
+  const loadProjectAllPages = () => {
+    setIsLoading(true);
+    GetAllPageList()
+      .then((allList) => {
+        const safeList = allList || [];
+        setAllProjectPages(safeList);
+        setFilteredPages(safeList);
+        setDisplayedPages(safeList.slice(0, 100));
+        setDisplayCount(100);
+
+        const counts: { [key: string]: number } = {};
+        safeList.forEach(p => {
+          if (p.tags) {
+            p.tags.forEach(t => {
+              const lower = t.trim();
+              if (lower) counts[lower] = (counts[lower] || 0) + 1;
+            });
+          }
+        });
+        setTagCounts(counts);
+        setUniqueTags(Object.keys(counts));
+      })
+      .catch((err) => console.error("データ取得失敗:", err))
+      .finally(() => setIsLoading(false));
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setIsSearchOpen((prev) => !prev);
+      }
+      if (e.key === 'Escape') {
+        setIsSearchOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  useEffect(() => {
+    if (
+      isSearchOpen &&
+      searchInputRef.current
+    ) {
+      searchInputRef.current.focus();
+    }
+  }, [isSearchOpen, searchMode]);
+
+  useEffect(() => {
+    if (viewMode !== 'MAIN_LIST' || selectedTag || selectedStatus !== null) return;
+
+    const handleScroll = () => {
+      if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 200) {
+        if (displayCount < filteredPages.length) {
+          setDisplayCount((prevCount) => {
+            const nextCount = prevCount + 100;
+            setDisplayedPages(filteredPages.slice(0, nextCount));
+            return nextCount;
+          });
+        }
+      }
+    };
+
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, [displayCount, filteredPages, viewMode, selectedTag, selectedStatus]);
+
+  useEffect(() => {
+    const filtered = allProjectPages.filter(
+      (item) => {
+        const matchesSearch =
+          searchQuery.trim() === ''
+            ? true
+            : item.title
+                .toLowerCase()
+                .includes(
+                  searchQuery.toLowerCase()
+                );
+
+        const matchesTag =
+          selectedTag
+            ? item.tags?.some(
+                (t) =>
+                  t.toLowerCase() ===
+                  selectedTag.toLowerCase()
+              )
+            : true;
+
+        const matchesStatus =
+          selectedStatus !== null
+            ? item.statusId ===
+              selectedStatus
+            : true;
+
+        return (
+          matchesSearch &&
+          matchesTag &&
+          matchesStatus
+        );
+      }
+    );
+
+    let sorted = [...filtered];
+
+    switch (sortMode) {
+      case 'NEWEST':
+      sorted.sort(
+        (a, b) => b.sortId - a.sortId
+      );
+      break;
+
+    case 'OLDEST':
+      sorted.sort(
+        (a, b) => a.sortId - b.sortId
+      );
+      break;
+
+      case 'TITLE_ASC':
+        sorted.sort((a, b) =>
+          a.title.localeCompare(
+            b.title,
+            'ja',
+            { sensitivity: 'base' }
+          )
+        );
+        break;
+
+      case 'TITLE_DESC':
+        sorted.sort((a, b) =>
+          b.title.localeCompare(
+            a.title,
+            'ja',
+            { sensitivity: 'base' }

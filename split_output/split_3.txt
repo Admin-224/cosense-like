@@ -1,0 +1,550 @@
+    //
+    if (
+      lowerUrl.includes('x.com') ||
+      lowerUrl.includes('twitter.com')
+    ) {
+      return (
+        <div className="bg-[#141619] border border-[#4f5764] rounded-md p-4">
+          <TwitterEmbed
+            url={url}
+          />
+        </div>
+      );
+    }
+
+    //
+    // 7. 音声
+    //
+    if (
+      lowerUrl.endsWith('.mp3') ||
+      lowerUrl.endsWith('.wav') ||
+      lowerUrl.endsWith('.ogg') ||
+      lowerUrl.endsWith('.m4a')
+    ) {
+      return (
+        <div className="bg-[#1e2126] p-6 rounded-md border border-[#4f5764]">
+          <audio
+            controls
+            className="w-full"
+            src={url}
+          />
+        </div>
+      );
+    }
+
+    //
+    // 8. 画像
+    //
+    if (
+      /\.(png|jpg|jpeg|gif|webp|svg)$/i.test(
+        lowerUrl
+      )
+    ) {
+      return (
+        <div className="bg-[#141619] rounded-md p-2 border border-[#4f5764]">
+          <img
+            src={url}
+            className="max-w-full max-h-[700px] mx-auto object-contain"
+          />
+        </div>
+      );
+    }
+
+    //
+    // 9. Amazon
+    //
+    if (
+      lowerUrl.includes(
+        'amazon.'
+      )
+    ) {
+      return (
+        <div className="bg-[#1e2126] rounded-md p-6 border border-[#4f5764]">
+          <div className="text-sm text-gray-300">
+            Amazon は
+            iframe埋め込み制限のため
+            内部表示できません
+          </div>
+
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            className="text-cyan-400 underline mt-3 inline-block"
+          >
+            Amazonを開く →
+          </a>
+        </div>
+      );
+    }
+
+    //
+    // 10. 一般サイト
+    //
+    return (
+      <FullscreenContainer className="w-full h-[800px] rounded-md overflow-hidden">
+        <iframe
+          className="w-full h-full bg-white"
+          src={url}
+          sandbox="
+            allow-scripts
+            allow-same-origin
+            allow-forms
+            allow-popups
+          "
+        />
+      </FullscreenContainer>
+    );
+  };
+
+  const filteredSearchTitles =
+    searchQuery.trim() === ''
+      ? []
+      : allProjectPages
+          .filter((p) =>
+            p.title
+              .toLowerCase()
+              .includes(
+                searchQuery.toLowerCase()
+              )
+          )
+          .slice(0, 50);
+  const filteredSearchTags = searchQuery.trim() === '' ? [] : uniqueTags.filter(tag =>
+    tag.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+const classificationTags =
+  fixedCategories.filter(cat =>
+    uniqueTags.some(
+      t =>
+        t.toLowerCase() ===
+        cat.toLowerCase()
+    )
+  );
+
+const artistTags =
+  uniqueTags
+    .filter(
+      tag =>
+        !fixedCategories.some(
+          cat =>
+            cat.toLowerCase() ===
+            tag.toLowerCase()
+        )
+    )
+    .sort((a, b) =>
+      a.localeCompare(
+        b,
+        'ja',
+        { sensitivity: 'base' }
+      )
+    );
+
+  // mp4サムネキャッシュ（メモリのみ）
+  const [runtimeThumbMap, setRuntimeThumbMap] = useState<Record<string, string>>({});
+
+  const generatingThumbsRef = useRef<Set<string>>(new Set());
+
+  const createVideoThumbnail = useCallback(async (url: string): Promise<string | null> => {
+    return new Promise((resolve) => {
+      const video = document.createElement('video');
+
+      video.crossOrigin = 'anonymous';
+      video.preload = 'metadata';
+      video.muted = true;
+      video.playsInline = true;
+
+      video.src =
+        `http://localhost:54321/video?url=${encodeURIComponent(url)}`;
+
+      const cleanup = () => {
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+      };
+
+      video.onloadedmetadata = () => {
+        try {
+          // 真っ黒回避
+          video.currentTime = Math.min(
+            0.2,
+            Math.max(0, (video.duration || 1) - 0.1)
+          );
+        } catch {
+          cleanup();
+          resolve(null);
+        }
+      };
+
+      video.onseeked = () => {
+        try {
+          const canvas = document.createElement('canvas');
+
+          canvas.width = video.videoWidth || 640;
+          canvas.height = video.videoHeight || 360;
+
+          const ctx = canvas.getContext('2d');
+
+          if (!ctx) {
+            cleanup();
+            resolve(null);
+            return;
+          }
+
+          ctx.drawImage(video, 0, 0);
+
+          const dataUrl = canvas.toDataURL(
+            'image/jpeg',
+            0.75
+          );
+
+          cleanup();
+          resolve(dataUrl);
+        } catch (e) {
+          console.error('thumbnail create error', e);
+          cleanup();
+          resolve(null);
+        }
+      };
+
+      video.onerror = (e) => {
+        console.error('thumbnail video error', e);
+        cleanup();
+        resolve(null);
+      };
+    });
+  }, []);
+
+  useEffect(() => {
+    const generateThumbs = async () => {
+      const candidates = displayedPages.filter((p) => {
+        const lowerUrl = p.url.toLowerCase();
+
+        const isVideo =
+          lowerUrl.includes('twimg.com') ||
+          lowerUrl.endsWith('.mp4') ||
+          lowerUrl.endsWith('.webm') ||
+          lowerUrl.endsWith('.ogv');
+
+        return (
+          isVideo &&
+          !p.thumbnailUrl &&
+          !runtimeThumbMap[p.id] &&
+          !generatingThumbsRef.current.has(p.id)
+        );
+      });
+
+      // 一気にやると重いので最大3並列
+      const limited = candidates.slice(0, 3);
+
+      for (const page of limited) {
+        generatingThumbsRef.current.add(page.id);
+
+        try {
+          const thumb = await createVideoThumbnail(page.url);
+
+          if (thumb) {
+            setRuntimeThumbMap((prev) => ({
+              ...prev,
+              [page.id]: thumb,
+            }));
+          }
+        } finally {
+          generatingThumbsRef.current.delete(page.id);
+        }
+      }
+    };
+
+    generateThumbs();
+  }, [displayedPages, runtimeThumbMap, createVideoThumbnail]);
+  
+  const seenVideoIds = new Set<string>();
+
+  return (
+    <div className="relative min-h-screen bg-[#1a1c20]">
+      <div className={`fixed inset-0 bg-[#111215] z-50 pointer-events-none transition-opacity duration-150 ease-in-out ${isFading ? 'opacity-100' : 'opacity-0'}`} />
+
+      <div className="bg-[#16181b] border-b-2 border-[#404650] px-6 py-3 flex items-center justify-between sticky top-0 z-40 shadow-xl">
+        <div className="flex items-center gap-4 flex-grow max-w-3xl">
+          <div className="flex items-center gap-2">
+            <button onClick={() => executeGoBack(historyIndex, history)} disabled={historyIndex === 0} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors border ${historyIndex === 0 ? 'text-gray-600 border-gray-800 cursor-not-allowed' : 'text-white bg-[#2c3038] border-[#4f5764] hover:bg-[#3d434e]'}`} title="戻る">◀</button>
+            <button onClick={() => executeGoForward(historyIndex, history)} disabled={historyIndex === history.length - 1} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors border ${historyIndex === history.length - 1 ? 'text-gray-600 border-gray-800 cursor-not-allowed' : 'text-white bg-[#2c3038] border-[#4f5764] hover:bg-[#3d434e]'}`} title="進む">▶</button>
+          </div>
+
+          <div onClick={() => setIsSearchOpen(true)} className="flex-grow bg-[#141619] border border-[#474f5c] hover:border-[#5cc3f6] rounded-md px-3 py-1.5 flex items-center justify-between cursor-pointer transition-colors shadow-inner text-gray-500 group">
+            <div className="flex items-center gap-2 text-sm">
+              <span>🔍</span>
+              <span className="group-hover:text-gray-300 transition-colors"></span>
+            </div>
+            <span className="text-[10px] bg-[#23262d] text-gray-400 font-mono px-1.5 py-0.5 rounded border border-[#3d434e] shadow-sm font-bold">Ctrl + K</span>
+          </div>
+          
+          <div className="flex items-center gap-2 bg-[#1b1e22] border border-[#474f5c] px-3 py-1.5 rounded-md shadow-inner shrink-0">
+            <label className="text-[11px] font-bold text-gray-400 font-sans tracking-wider">Status:</label>
+            <select 
+              value={selectedStatus !== null ? selectedStatus : 'all'} 
+              onChange={(e) => handleStatusFilterChange(e.target.value === 'all' ? null : Number(e.target.value))} 
+              className={`bg-transparent font-extrabold text-sm outline-none cursor-pointer tracking-wide border-0 p-0 pr-4 focus:ring-0 font-sans ${selectedStatus !== null ? STATUS_MAP[selectedStatus].color : 'text-white'}`}
+            >
+              <option value="all" className="bg-[#23262d] text-white font-bold">🔘 全て表示</option>
+              <option value={0} className="bg-[#23262d] text-gray-400 font-bold">⚪ 未試聴</option>
+              <option value={1} className="bg-[#23262d] text-blue-400 font-bold">🔵 登録予定</option>
+              <option value={2} className="bg-[#23262d] text-red-400 font-bold">🔴 削除予定</option>
+              <option value={3} className="bg-[#23262d] text-green-400 font-bold">🟢 登録済</option>
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2 bg-[#1b1e22] border border-[#474f5c] px-3 py-1.5 rounded-md shadow-inner shrink-0">
+            <label className="text-[11px] font-bold text-gray-400 font-sans tracking-wider">
+              Sort:
+            </label>
+
+            <select
+              value={sortMode}
+              onChange={(e) => {
+                const next =
+                  e.target.value as SortMode;
+
+                setSortMode(next);
+
+                if (next !== 'RANDOM') {
+                  setRandomOrder([]);
+                }
+              }}
+              className="
+                bg-transparent
+                font-extrabold
+                text-sm
+                outline-none
+                cursor-pointer
+                tracking-wide
+                border-0
+                p-0
+                pr-4
+                focus:ring-0
+                font-sans
+                text-white
+              "
+            >
+              <option
+                value="NEWEST"
+                className="bg-[#23262d] text-white font-bold"
+              >
+                🆕 新しい順
+              </option>
+
+              <option
+                value="OLDEST"
+                className="bg-[#23262d] text-white font-bold"
+              >
+                📜 古い順
+              </option>
+
+              <option
+                value="TITLE_ASC"
+                className="bg-[#23262d] text-white font-bold"
+              >
+                🔤 タイトル順
+              </option>
+
+              <option
+                value="TITLE_DESC"
+                className="bg-[#23262d] text-white font-bold"
+              >
+                🔠 タイトル逆順
+              </option>
+
+              <option
+                value="RANDOM"
+                className="bg-[#23262d] text-white font-bold"
+              >
+                🎲 ランダム
+              </option>
+            </select>
+
+            {sortMode === 'RANDOM' && (
+              <button
+                onClick={() => {
+                  const shuffled =
+                    shuffleArray(
+                      filteredPages
+                    );
+
+                  setRandomOrder(
+                    shuffled.map(
+                      (p) => p.id
+                    )
+                  );
+                }}
+                className="
+                  text-xs
+                  px-2
+                  py-1
+                  rounded-md
+                  bg-[#4b3b67]
+                  hover:bg-[#5a4677]
+                  text-white
+                  transition-colors
+                "
+              >
+                🔀
+              </button>
+            )}
+          </div>
+
+          {(selectedTag ||
+            appliedTitleSearch) && (
+            <div className="flex items-center gap-2 bg-[#252930] border-2 border-[#5cc3f6] px-3 py-1 rounded-md text-sm shadow-inner shrink-0">
+              <span className="text-gray-400 text-xs font-bold">
+                絞り込み:
+              </span>
+
+              {appliedTitleSearch && (
+                <span className="text-[#5cc3f6] font-black tracking-wider">
+                  🔍 {appliedTitleSearch}
+                </span>
+              )}
+
+              {selectedTag && (
+                <span className="text-[#5cc3f6] font-black tracking-wider">
+                  🏷️ {selectedTag}
+                </span>
+              )}
+
+              <button
+                onClick={handleClearSearch}
+                className="text-gray-400 hover:text-red-400 ml-1.5 font-bold text-xs bg-[#16181b] w-4 h-4 rounded-full flex items-center justify-center border border-[#404650]"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center gap-4 shrink-0 ml-4">
+          {viewMode === 'MAIN_LIST' && (
+            <button
+              onClick={() => {
+                setIsSelectMode(!isSelectMode);
+                setSelectedIds(new Set());
+              }}
+              className={`px-4 py-1.5 rounded-md text-xs font-bold tracking-wider border transition-all ${
+                isSelectMode
+                  ? 'bg-violet-500/20 text-violet-200 border-violet-400 shadow-[0_0_12px_rgba(139,92,246,0.15)] font-black'
+                  : 'bg-[#2c3038] text-violet-300 border-violet-500/30 hover:bg-[#343944] hover:border-violet-400 hover:text-violet-200'
+              }`}
+            >
+              {isSelectMode ? `選択解除 (${selectedIds.size}件)` : '☑ 複数一括変更'}
+            </button>
+          )}
+
+          <button
+            onClick={() => navigateTo(viewMode === 'TAG_LIST' ? 'MAIN_LIST' : 'TAG_LIST', null, null, selectedStatus, true)}
+            className={`px-4 py-1.5 rounded-md text-xs font-bold tracking-wider border transition-all ${viewMode === 'TAG_LIST' ? 'bg-[#5cc3f6] text-[#141619] border-[#5cc3f6] font-black' : 'bg-[#2c3038] text-gray-200 border-[#4f5764] hover:bg-[#3d434e]'}`}
+          >
+            {viewMode === 'TAG_LIST' ? '🎵 一覧に戻る' : '🏷️ タグ一覧を開く'}
+          </button>
+
+          <div className="flex items-center gap-2 bg-[#1b1e22] border border-[#474f5c] px-3 py-1.5 rounded-md shadow-inner shrink-0">
+            <label className="text-[11px] font-bold text-gray-400 font-sans tracking-wider">
+              Project:
+            </label>
+
+            <select
+              value={currentProject}
+              onChange={(e) => handleProjectChange(e.target.value)}
+              className="bg-transparent font-extrabold text-sm outline-none cursor-pointer tracking-wide border-0 p-0 pr-4 focus:ring-0 font-sans text-white"
+            >
+              <option value="mx-music" className="bg-[#23262d] text-white font-bold">
+                mx-music
+              </option>
+
+              <option value="mx-streaming" className="bg-[#23262d] text-white font-bold">
+                mx-streaming
+              </option>
+
+              <option value="mx-anomaly" className="bg-[#23262d] text-white font-bold">
+                mx-anomaly
+              </option>
+
+              <option value="mx-other" className="bg-[#23262d] text-white font-bold">
+                mx-other
+              </option>
+
+              <option value="mx-tmp" className="bg-[#23262d] text-white font-bold">
+                mx-tmp
+              </option>
+              <option value="mx-secret">
+                mx-secret
+              </option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* 🔍 検索モーダル */}
+      {isSearchOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-start justify-center pt-[10vh] px-4">
+          <div className="absolute inset-0" onClick={() => setIsSearchOpen(false)} />
+          <div className="bg-[#1f2228] border-2 border-[#474f5c] w-full max-w-2xl rounded-xl shadow-2xl relative z-10 overflow-hidden flex flex-col max-h-[70vh]">
+            <div className="flex border-b border-[#343944] bg-[#16181b]">
+              <button onClick={() => setSearchMode('TITLE')} className={`flex-1 py-3 text-sm font-bold tracking-wider transition-colors ${searchMode === 'TITLE' ? 'text-[#5cc3f6] bg-[#1f2228] border-b-2 border-[#5cc3f6]' : 'text-gray-400 hover:text-white'}`}>📝 タイトルで検索</button>
+              <button onClick={() => setSearchMode('TAG')} className={`flex-1 py-3 text-sm font-bold tracking-wider transition-colors ${searchMode === 'TAG' ? 'text-[#5cc3f6] bg-[#1f2228] border-b-2 border-[#5cc3f6]' : 'text-gray-400 hover:text-white'}`}>🏷️ タグで検索</button>
+            </div>
+            <div className="p-4 bg-[#1b1d22] border-b border-[#343944] flex items-center gap-3">
+              <span className="text-xl">🔍</span>
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchQuery}
+                onChange={(e) =>
+                  setSearchQuery(e.target.value)
+                }
+                onKeyDown={(e) => {
+                  if (
+                    e.key === 'Enter' &&
+                    searchMode === 'TITLE'
+                  ) {
+                    handleExecuteTitleSearch();
+                  }
+                }}
+                placeholder={
+                  searchMode === 'TITLE'
+                    ? 'タイトルを入力してEnter...'
+                    : 'タグを選択してください...'
+                }
+                className="w-full bg-transparent border-0 outline-none text-white placeholder-gray-500 font-medium text-base focus:ring-0"
+              />
+              <button onClick={() => setIsSearchOpen(false)} className="text-xs text-gray-500 hover:text-gray-300 font-mono bg-[#16181b] border border-[#343944] px-2 py-1 rounded">ESC</button>
+            </div>
+            <div className="overflow-y-auto flex-grow p-2 space-y-1 bg-[#1f2228]">
+              {searchQuery.trim() === '' ? (
+                <div className="text-center py-8 text-gray-500 text-xs font-mono">キーワードを入力すると候補が出ます</div>
+              ) : searchMode === 'TITLE' ? (
+                filteredSearchTitles.length === 0 ? <div className="text-center py-8 text-gray-500 text-xs font-mono">一致するタイトルがありません</div> :
+                filteredSearchTitles.map((p) => (
+                  <div
+                    key={p.id}
+                    onClick={() => {
+                      setIsSearchOpen(false);
+                      handleSelectPage(p);
+                    }} className="p-3 rounded-lg hover:bg-[#2a2f3a] border border-transparent hover:border-[#474f5c] transition-all cursor-pointer flex items-center justify-between group">
+                    <div className="flex flex-col gap-1 pr-4">
+                      <span className="text-sm font-bold text-gray-200 group-hover:text-[#5cc3f6] line-clamp-1">{p.title}</span>
+                      <div className="flex gap-1.5 flex-wrap">
+                        {p.tags?.slice(0, 3).map((t, idx) => <span key={idx} className="text-[10px] bg-[#141619] text-gray-400 border border-[#343944] px-1.5 py-0.5 rounded font-sans">{t}</span>)}
+                      </div>
+                    </div>
+                    <span className={`text-[10px] px-2 py-0.5 rounded border ${STATUS_MAP[p.statusId]?.border} ${STATUS_MAP[p.statusId]?.color} shrink-0 font-mono`}>{STATUS_MAP[p.statusId]?.label}</span>
+                  </div>
+                ))
+              ) : (
+                filteredSearchTags.length === 0 ? <div className="text-center py-8 text-gray-500 text-xs font-mono">一致するタグがありません</div> :
+                filteredSearchTags.map((tag, idx) => (
+                  <div key={idx} onClick={() => { setIsSearchOpen(false); handleTagClick(tag); }} className="p-3 rounded-lg hover:bg-[#2a2f3a] border border-transparent hover:border-[#474f5c] transition-all cursor-pointer flex items-center justify-between group">
+                    <div className="flex items-center gap-2"><span className="text-base text-[#5cc3f6]">🏷️</span><span className="text-sm font-extrabold text-gray-200 group-hover:text-[#5cc3f6] tracking-wider">{tag}</span></div>
+                    <span className="text-[11px] text-gray-500 font-mono group-hover:text-gray-300">このタグで絞り込む ➔</span>
+                  </div>
+                ))
+              )}
+            </div>

@@ -19,6 +19,11 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+type TimeStamp struct {
+    Label string `json:"label"`
+    Time  int    `json:"time"`
+}
+
 type PageHeader struct {
 	ID           string   `json:"id"` // rowid
 	SortID       int64    `json:"sortId"`
@@ -28,6 +33,7 @@ type PageHeader struct {
 	StatusID     int      `json:"statusId"`
 	Tags         []string `json:"tags"`
 	ThumbnailURL string   `json:"thumbnailUrl"`
+	TimeStamps []TimeStamp `json:"timeStamps"`
 }
 
 type ProjectContainer struct {
@@ -600,6 +606,76 @@ func (a *App) UpdatePageStatus(rowIDStr string, newStatusID int) (bool, error) {
 	}
 
 	log.Printf("[%s] ID: %s のステータスを %d に更新しました", a.currentProject, rowIDStr, newStatusID)
+	return true, nil
+}
+
+func (a *App) SaveTimeStamps(
+	pageID string,
+	timeStamps []TimeStamp,
+) (bool, error) {
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	jsonPath := a.getJsonFilePath()
+
+	jsonBytes, err := os.ReadFile(jsonPath)
+	if err != nil {
+		return false, err
+	}
+
+	var container ProjectContainer
+
+	err = json.Unmarshal(
+		jsonBytes,
+		&container,
+	)
+	if err != nil {
+		return false, err
+	}
+
+	found := false
+
+	for i := range container.Pages {
+
+		if container.Pages[i].ID == pageID {
+
+			container.Pages[i].TimeStamps =
+				timeStamps
+
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return false, fmt.Errorf(
+			"page not found: %s",
+			pageID,
+		)
+	}
+
+	newBytes, err :=
+		json.MarshalIndent(
+			container,
+			"",
+			"  ",
+		)
+
+	if err != nil {
+		return false, err
+	}
+
+	err = os.WriteFile(
+		jsonPath,
+		newBytes,
+		0644,
+	)
+
+	if err != nil {
+		return false, err
+	}
+
 	return true, nil
 }
 

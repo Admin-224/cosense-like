@@ -6,8 +6,14 @@ import {
   UpdatePageStatus,
   SwitchProject,
   GetTags,
-  GetFixedTags
+  GetFixedTags,
+  SaveTimeStamps
 } from '../wailsjs/go/main/App';
+
+type TimeStamp = {
+  label: string;
+  time: number;
+};
 
 type PageHeader = {
   id: string;
@@ -18,6 +24,7 @@ type PageHeader = {
   sortId: number;
   tags: string[];
   thumbnailUrl: string;
+  timeStamps?: TimeStamp[];
 };
 
 type ViewMode = 'MAIN_LIST' | 'DETAIL' | 'TAG_LIST';
@@ -208,6 +215,83 @@ type Tag = {
   group: string;
 };
 
+timeStamps: [
+  {
+    label: "イントロ",
+    time: 15,
+  },
+  {
+    label: "サビ",
+    time: 83,
+  },
+]
+
+function parseTimeToSeconds(
+  value: string,
+): number {
+  const parts =
+    value.split(":").map(Number);
+
+  if (parts.length === 2) {
+    return parts[0] * 60 + parts[1];
+  }
+
+  if (parts.length === 3) {
+    return (
+      parts[0] * 3600 +
+      parts[1] * 60 +
+      parts[2]
+    );
+  }
+
+  return 0;
+}
+
+function handleAddTimestamp() {
+  if (!selectedPage) return;
+
+  const label =
+    newTimestampLabel.trim();
+
+  if (!label) return;
+
+  const sec =
+    parseTimeToSeconds(
+      newTimestampTime,
+    );
+
+  setSelectedPage({
+    ...selectedPage,
+    timeStamps: [
+      ...(selectedPage.timeStamps ?? []),
+      {
+        label,
+        time: sec,
+      },
+    ],
+  });
+
+  setNewTimestampLabel("");
+  setNewTimestampTime("");
+}
+
+function handleDeleteTimestamp(
+  index: number,
+) {
+  if (!selectedPage) return;
+
+  setSelectedPage({
+    ...selectedPage,
+    timeStamps:
+      (
+        selectedPage.timeStamps ??
+        []
+      ).filter(
+        (_, i) => i !== index,
+      ),
+  });
+}
+
 export default function Home() {
   const [fixedCategories, setFixedCategories] =
     useState<string[]>([]);
@@ -218,6 +302,10 @@ export default function Home() {
   const [displayedPages, setDisplayedPages] = useState<PageHeader[]>([]);  
 
   const [viewMode, setViewMode] = useState<ViewMode>('MAIN_LIST');
+  const [newTimestampLabel, setNewTimestampLabel] =
+    useState("");
+  const [newTimestampTime, setNewTimestampTime] =
+    useState("");
   const [selectedPage, setSelectedPage] = useState<PageHeader | null>(null);
   const [isFading, setIsFading] = useState(false);
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
@@ -1811,23 +1899,23 @@ const artistTags =
                       </div>
                       <div className="w-full h-44 bg-[#141619] relative overflow-hidden flex items-center justify-center">
                         {(runtimeThumbMap[p.id] || p.thumbnailUrl) ? (
-  <img
-    src={runtimeThumbMap[p.id] || p.thumbnailUrl}
-    alt={p.title}
-    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-    loading="lazy"
-  />
-) : (
-  <div className="flex flex-col items-center justify-center text-gray-600 text-xs font-mono gap-2">
-    <div>No Image</div>
-    {(p.url.includes('twimg.com') ||
-      p.url.toLowerCase().endsWith('.mp4')) && (
-      <div className="animate-pulse text-[10px] text-cyan-500">
-        generating...
-      </div>
-    )}
-  </div>
-)}
+                          <img
+                            src={runtimeThumbMap[p.id] || p.thumbnailUrl}
+                            alt={p.title}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <div className="flex flex-col items-center justify-center text-gray-600 text-xs font-mono gap-2">
+                            <div>No Image</div>
+                            {(p.url.includes('twimg.com') ||
+                              p.url.toLowerCase().endsWith('.mp4')) && (
+                              <div className="animate-pulse text-[10px] text-cyan-500">
+                                generating...
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -1884,6 +1972,39 @@ const artistTags =
                 </div>
               </div>
 
+              <div className="mt-4">
+                <div className="font-bold mb-2">
+                  タイムスタンプ
+                </div>
+
+                {(selectedPage.timeStamps ?? []).map(
+                  (ts, index) => (
+                    <button
+                      key={index}
+                      className="
+                        mr-2
+                        mb-2
+                        px-2
+                        py-1
+                        rounded
+                        border
+                      "
+                      onClick={() =>
+                        window.open(
+                          buildTimestampUrl(
+                            selectedPage.url,
+                            formatTime(ts.time),
+                          ),
+                          "_blank",
+                        )
+                      }
+                    >
+                      {ts.label}
+                    </button>
+                  ),
+                )}
+              </div>
+
               {/* 関連ページセクション */}
               {selectedPage.tags && selectedPage.tags.length > 0 && (
                 <div className="space-y-6">
@@ -1938,6 +2059,118 @@ const artistTags =
                   <div>ID: {selectedPage.id}</div>
                   <div className="text-[10px] text-emerald-400 font-bold mt-2">✓ 変更は自動同期</div>
                 </div>
+              </div>
+              <div className="border-t border-[#3d434e] pt-4">
+                <label className="block text-xs text-gray-400 mb-2 font-medium">
+                  タイムスタンプ管理
+                </label>
+
+                <div className="space-y-2 mb-3">
+                  {(selectedPage.timeStamps ?? []).map(
+                    (ts, index) => (
+                      <div
+                        key={index}
+                        className="flex gap-2 items-center"
+                      >
+                        <div className="flex-1 text-xs">
+                          {ts.label}
+                        </div>
+
+                        <div className="text-xs text-gray-400">
+                          {ts.time}s
+                        </div>
+
+                        <button
+                          onClick={() =>
+                            handleDeleteTimestamp(
+                              index,
+                            )
+                          }
+                          className="
+                            px-2 py-1
+                            bg-red-600
+                            rounded
+                            text-xs
+                          "
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ),
+                  )}
+                </div>
+
+                <input
+                  value={newTimestampLabel}
+                  onChange={(e) =>
+                    setNewTimestampLabel(
+                      e.target.value,
+                    )
+                  }
+                  placeholder="ラベル"
+                  className="
+                    w-full mb-2 p-2
+                    bg-[#141619]
+                    border border-[#474f5c]
+                    rounded
+                    text-sm
+                  "
+                />
+
+                <input
+                  value={newTimestampTime}
+                  onChange={(e) =>
+                    setNewTimestampTime(
+                      e.target.value,
+                    )
+                  }
+                  placeholder="01:23"
+                  className="
+                    w-full mb-2 p-2
+                    bg-[#141619]
+                    border border-[#474f5c]
+                    rounded
+                    text-sm
+                  "
+                />
+
+                <button
+                  onClick={handleAddTimestamp}
+                  className="
+                    w-full
+                    bg-[#5cc3f6]
+                    text-black
+                    py-2
+                    rounded
+                    font-bold
+                  "
+                >
+                  追加
+                </button>
+                <button
+                  onClick={async () => {
+
+                    if (!selectedPage) return;
+
+                    await SaveTimeStamps(
+                      selectedPage.id,
+                      selectedPage.timeStamps ?? [],
+                    );
+
+                    alert("保存しました");
+                  }}
+                  className="
+                    mt-2
+                    w-full
+                    bg-green-600
+                    text-white
+                    py-2
+                    rounded
+                    font-bold
+                  "
+                >
+                  保存
+                </button>
               </div>
             </div>
 

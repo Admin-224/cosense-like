@@ -1,0 +1,550 @@
+          )
+        );
+        break;
+
+      case 'RANDOM':
+        if (randomOrder.length === 0) {
+          const shuffled =
+            shuffleArray(sorted);
+
+          const ids = shuffled.map(
+            (p) => p.id
+          );
+
+          setRandomOrder(ids);
+
+          sorted = shuffled;
+        } else {
+          const orderMap =
+            new Map(
+              randomOrder.map(
+                (id, index) => [
+                  id,
+                  index,
+                ]
+              )
+            );
+
+          sorted.sort((a, b) => {
+            const aIdx =
+              orderMap.get(a.id) ??
+              Infinity;
+
+            const bIdx =
+              orderMap.get(b.id) ??
+              Infinity;
+
+            return aIdx - bIdx;
+          });
+        }
+        break;
+    }
+
+    setFilteredPages(sorted);
+
+    if (
+      selectedTag ||
+      selectedStatus !== null
+    ) {
+      setDisplayedPages(sorted);
+    } else {
+      setDisplayedPages(
+        sorted.slice(0, 100)
+      );
+
+      setDisplayCount(100);
+    }
+  }, [
+    searchQuery,
+    selectedTag,
+    selectedStatus,
+    allProjectPages,
+    sortMode,
+    randomOrder
+  ]);
+
+  const getListCacheKey = (mode: ViewMode, tag: string | null, status: number | null, project: string) => {
+    return `${mode}_${tag || ''}_${status !== null ? status : 'all'}_${project}`;
+  };
+
+  const saveCurrentScrollPosition = (idx: number, mode: ViewMode, tag: string | null, status: number | null, project: string) => {
+    if (mode === 'DETAIL') {
+      detailScrollPositions.current[idx] = window.scrollY;
+    } else {
+      const cacheKey = getListCacheKey(mode, tag, status, project);
+      listScrollPositions.current[cacheKey] = window.scrollY;
+    }
+  };
+
+  const applyHistoryState = (state: HistoryState, targetIdx: number, isNewClick: boolean) => {
+    setViewMode(state.viewMode);
+    setSelectedPage(state.selectedPage);
+    setSelectedTag(state.selectedTag);
+    setSelectedStatus(state.selectedStatus);
+    setCurrentProject(state.project);
+
+    if (isNewClick) {
+      setTimeout(() => {
+        window.scrollTo(0, 0);
+      }, 20);
+    } else {
+      let targetScrollTop = 0;
+      if (state.viewMode === 'DETAIL') {
+        targetScrollTop = detailScrollPositions.current[targetIdx] || 0;
+      } else {
+        const cacheKey = getListCacheKey(state.viewMode, state.selectedTag, state.selectedStatus, state.project);
+        targetScrollTop = listScrollPositions.current[cacheKey] || 0;
+      }
+
+      let attempts = 0;
+      const retryScroll = () => {
+        window.scrollTo(0, targetScrollTop);
+        attempts++;
+        if (attempts < 8) {
+          setTimeout(retryScroll, 40);
+        }
+      };
+      setTimeout(retryScroll, 40);
+    }
+  };
+
+  const executeGoBack = (currentIdx: number, currentHistory: HistoryState[]) => {
+    if (currentIdx > 0) {
+      const currentSnapshot = stateRef.current;
+      saveCurrentScrollPosition(currentIdx, currentSnapshot.viewMode, currentSnapshot.selectedTag, currentSnapshot.selectedStatus, currentSnapshot.currentProject);
+
+      setIsVideoLoaded(false);
+      setIsFading(true);
+      setTimeout(() => {
+        const prevIdx = currentIdx - 1;
+        setHistoryIndex(prevIdx);
+        const prevState = currentHistory[prevIdx];
+        
+        if (prevState.project !== currentSnapshot.currentProject) {
+          setIsFading(false);
+          setIsVideoLoaded(true);
+          return;
+        }
+
+        applyHistoryState(prevState, prevIdx, false); 
+        setTimeout(() => {
+          setIsFading(false);
+          setIsVideoLoaded(true);
+         }, 50);
+      }, 150);
+    }
+  };
+
+  const executeGoForward = (currentIdx: number, currentHistory: HistoryState[]) => {
+    if (currentIdx < currentHistory.length - 1) {
+      const currentSnapshot = stateRef.current;
+      saveCurrentScrollPosition(currentIdx, currentSnapshot.viewMode, currentSnapshot.selectedTag, currentSnapshot.selectedStatus, currentSnapshot.currentProject);
+
+      setIsVideoLoaded(false);
+      setIsFading(true);
+      setTimeout(() => {
+        const nextIdx = currentIdx + 1;
+        setHistoryIndex(nextIdx);
+        const nextState = currentHistory[nextIdx];
+
+        if (nextState.project !== currentSnapshot.currentProject) {
+          setIsFading(false);
+          setIsVideoLoaded(true);
+          return;
+        }
+
+        applyHistoryState(nextState, nextIdx, false); 
+        setTimeout(() => {
+          setIsFading(false);
+          setIsVideoLoaded(true);
+        }, 50);
+      }, 150);
+    }
+  };
+
+  useEffect(() => {
+    handlersRef.current = {
+      executeGoBack: () => executeGoBack(stateRef.current.historyIndex, stateRef.current.history),
+      executeGoForward: () => executeGoForward(stateRef.current.historyIndex, stateRef.current.history)
+    };
+  });
+
+  useEffect(() => {
+    const handleMouseUp = (e: MouseEvent) => {
+      if (e.button === 3) { e.preventDefault(); handlersRef.current.executeGoBack(); }
+      if (e.button === 4) { e.preventDefault(); handlersRef.current.executeGoForward(); }
+    };
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => window.removeEventListener('mouseup', handleMouseUp);
+  }, []);
+
+  const navigateTo = (nextMode: ViewMode, nextPage: PageHeader | null, nextTag: string | null, nextStatus: number | null, isNewClick: boolean = false) => {
+    const currentSnapshot = stateRef.current;
+    saveCurrentScrollPosition(currentSnapshot.historyIndex, currentSnapshot.viewMode, currentSnapshot.selectedTag, currentSnapshot.selectedStatus, currentSnapshot.currentProject);
+
+    setIsVideoLoaded(false);
+    setIsFading(true);
+    
+    setTimeout(() => {
+      const cleanHistory = currentSnapshot.history.slice(0, currentSnapshot.historyIndex + 1);
+      const newState: HistoryState = { viewMode: nextMode, selectedPage: nextPage, selectedTag: nextTag, selectedStatus: nextStatus, project: currentSnapshot.currentProject };
+      
+      const newHistory = [...cleanHistory, newState];
+      const newIdx = cleanHistory.length;
+
+      setHistory(newHistory);
+      setHistoryIndex(newIdx);
+      applyHistoryState(newState, newIdx, isNewClick);
+      
+      setTimeout(() => {
+        setIsFading(false);
+        setIsVideoLoaded(true);
+      }, 50);
+    }, 150);
+  };
+
+  const handleProjectChange = async (projectName: string) => {
+    setIsFading(true);
+    setIsVideoLoaded(false);
+
+    let password = "";
+
+    // secretのみパスワード入力
+    if (projectName === "mx-secret") {
+      const input = window.prompt(
+        "mx-secret のパスワードを入力してください"
+      );
+
+      // キャンセル
+      if (input === null) {
+        setIsFading(false);
+        setIsVideoLoaded(true);
+        return;
+      }
+
+      password = input;
+    }
+
+    try {
+      const success = await SwitchProject(
+        projectName,
+        password
+      );
+
+      if (!success) {
+        alert("パスワードが違います");
+        setIsFading(false);
+        setIsVideoLoaded(true);
+        return;
+      }
+
+      setTimeout(async () => {
+        setCurrentProject(projectName);
+        setViewMode("MAIN_LIST");
+        setSelectedPage(null);
+        setSelectedTag(null);
+        setSelectedStatus(null);
+
+        setAllProjectPages([]);
+        setFilteredPages([]);
+        setDisplayedPages([]);
+
+        setUniqueTags([]);
+        setTagCounts({});
+        setGroupedTags({});
+
+        listScrollPositions.current = {};
+        detailScrollPositions.current = {};
+
+        setIsSelectMode(false);
+        setSelectedIds(new Set());
+
+        const newInitialState: HistoryState = {
+          viewMode: "MAIN_LIST",
+          selectedPage: null,
+          selectedTag: null,
+          selectedStatus: null,
+          project: projectName,
+        };
+
+        setHistory([newInitialState]);
+        setHistoryIndex(0);
+
+        setIsLoading(true);
+
+        try {
+          const allList = await GetAllPageList();
+          const safeList = allList || [];
+
+          setAllProjectPages(safeList);
+          setFilteredPages(safeList);
+          setDisplayedPages(safeList.slice(0, 100));
+          setDisplayCount(100);
+
+          const counts: { [key: string]: number } = {};
+
+          safeList.forEach((p) => {
+            if (p.tags) {
+              p.tags.forEach((t) => {
+                const lower = t.trim();
+
+                if (lower) {
+                  counts[lower] =
+                    (counts[lower] || 0) + 1;
+                }
+              });
+            }
+          });
+
+          setTagCounts(counts);
+          setUniqueTags(Object.keys(counts));
+        } catch (err) {
+          console.error(
+            "新プロジェクトデータ取得失敗:",
+            err
+          );
+        } finally {
+          setIsLoading(false);
+          setIsFading(false);
+        }
+      }, 150);
+    } catch (err) {
+      console.error(
+        "プロジェクト切り替え失敗:",
+        err
+      );
+
+      alert("パスワードが違います");
+      setIsFading(false);
+      setIsVideoLoaded(true);
+    }
+  };
+
+  const handleCardClick = (p: PageHeader) => {
+    if (isSelectMode) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(p.id)) next.delete(p.id);
+        else next.add(p.id);
+        return next;
+      });
+    } else {
+      handleSelectPage(p);
+    }
+  };
+
+  const handleCardContextMenu = (e: React.MouseEvent, p: PageHeader) => {
+    if (!isSelectMode) return;
+    e.preventDefault();
+    if (!selectedIds.has(p.id)) {
+      setSelectedIds((prev) => new Set(prev).add(p.id));
+    }
+    setContextMenu({ x: e.clientX, y: e.clientY });
+  };
+
+  const handleBulkStatusChange = (newStatusId: number) => {
+    if (selectedIds.size === 0) return;
+    setIsLoading(true);
+
+    const promises = Array.from(selectedIds).map((id) => UpdatePageStatus(id, newStatusId));
+
+    Promise.all(promises)
+      .then(() => {
+        setAllProjectPages((prev) =>
+          prev.map((p) => (selectedIds.has(p.id) ? { ...p, statusId: newStatusId } : p))
+        );
+        setHistory((prevHis) =>
+          prevHis.map((h) =>
+            h.selectedPage && selectedIds.has(h.selectedPage.id)
+              ? { ...h, selectedPage: { ...h.selectedPage, statusId: newStatusId } }
+              : h
+          )
+        );
+        setSelectedIds(new Set());
+        setIsSelectMode(false);
+      })
+      .catch((err) => console.error("一括ステータス更新失敗:", err))
+      .finally(() => setIsLoading(false));
+  };
+
+  const handleSelectPage = (page: PageHeader) => navigateTo('DETAIL', page, selectedTag, selectedStatus, true);
+  const handleGoToMainList = () => navigateTo('MAIN_LIST', null, selectedTag, selectedStatus, true);
+  const handleTagClick = (
+    tag: string
+  ) => {
+    setAppliedTitleSearch('');
+    setSearchQuery('');
+
+    navigateTo(
+      'MAIN_LIST',
+      null,
+      tag,
+      selectedStatus,
+      true
+    );
+
+    setIsSearchOpen(false);
+  };
+  const handleClearTagFilter = () => navigateTo('MAIN_LIST', null, null, selectedStatus, true);
+  const handleStatusFilterChange = (status: number | null) => navigateTo('MAIN_LIST', null, selectedTag, status, true);
+
+  const handleStatusChange = (newStatusId: number) => {
+    if (!selectedPage) return;
+    UpdatePageStatus(selectedPage.id, newStatusId)
+      .then((success) => {
+        if (success) {
+          const updated = { ...selectedPage, statusId: newStatusId };
+          setSelectedPage(updated);
+          setAllProjectPages((prev) => prev.map(p => p.id === selectedPage.id ? { ...p, statusId: newStatusId } : p));
+          setHistory((prevHis) => prevHis.map(h => h.selectedPage?.id === selectedPage.id ? { ...h, selectedPage: updated } : h));
+        }
+      })
+      .catch((err) => console.error("ステータス更新失敗:", err));
+  };
+
+  const handleExecuteTitleSearch = () => {
+    const query = searchQuery.trim();
+
+    setAppliedTitleSearch(query);
+    setSelectedTag(null);
+
+    setIsSearchOpen(false);
+  };
+
+  const handleClearSearch = () => {
+    setAppliedTitleSearch('');
+    setSearchQuery('');
+    setSelectedTag(null);
+  };
+
+  const getRelatedPagesByTag = (tag: string) => {
+    if (!selectedPage) return [];
+    return allProjectPages.filter(p => p.id !== selectedPage.id && p.tags && p.tags.includes(tag));
+  };
+
+  const renderEmbeddedContent = (
+    url: string
+  ) => {
+    if (!isVideoLoaded) {
+      return (
+        <div className="aspect-video w-full overflow-hidden rounded-md shadow-lg border border-[#4f5764] bg-[#141619] relative flex items-center justify-center">
+          <div className="text-xs text-gray-500 font-mono tracking-widest animate-pulse">
+            CONTENT INITIALIZING...
+          </div>
+        </div>
+      );
+    }
+
+    const lowerUrl =
+      url.toLowerCase();
+
+    //
+    // 1. mp4 / twimg
+    //
+    if (
+      lowerUrl.includes(
+        'twimg.com'
+      ) ||
+      lowerUrl.endsWith('.mp4') ||
+      lowerUrl.endsWith('.webm') ||
+      lowerUrl.endsWith('.ogv')
+    ) {
+      return (
+        <VideoPlayer url={url} />
+      );
+    }
+
+    //
+    // 2. YouTube
+    //
+    const ytRegex =
+      /(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]+)/i;
+
+    const ytMatch =
+      url.match(ytRegex);
+
+    if (ytMatch) {
+      const videoId =
+        ytMatch[1];
+
+      return (
+        <FullscreenContainer className="aspect-video w-full rounded-md overflow-hidden">
+          <iframe
+            className="w-full h-full"
+            src={`https://www.youtube.com/embed/${videoId}`}
+          />
+        </FullscreenContainer>
+      );
+    }
+
+    //
+    // 3. ニコニコ
+    //
+    const nicoRegex =
+      /nicovideo\.jp\/watch\/(sm\d+|\d+)/i;
+
+    const nicoMatch =
+      url.match(nicoRegex);
+
+    if (nicoMatch) {
+      return (
+        <FullscreenContainer className="aspect-video w-full rounded-md overflow-hidden">
+          <iframe
+            className="w-full h-full"
+            src={`https://embed.nicovideo.jp/watch/${nicoMatch[1]}`}
+            allowFullScreen
+          />
+        </FullscreenContainer>
+      );
+    }
+
+    //
+    // 4. Spotify
+    //
+    if (
+      lowerUrl.includes(
+        'spotify.com'
+      )
+    ) {
+      const embedUrl =
+        url.replace(
+          'open.spotify.com/intl-ja/',
+          'open.spotify.com/embed/'
+        );
+
+      return (
+        <FullscreenContainer className="w-full h-[420px] rounded-md overflow-hidden">
+          <iframe
+            className="w-full h-full"
+            src={embedUrl}
+            allow="autoplay; clipboard-write; encrypted-media; fullscreen"
+          />
+        </FullscreenContainer>
+      );
+    }
+
+    //
+    // 5. Instagram
+    //
+    if (
+      lowerUrl.includes(
+        'instagram.com'
+      )
+    ) {
+      const clean =
+        url
+          .split('?')[0]
+          .replace(/\/$/, '');
+
+      return (
+        <FullscreenContainer className="w-full h-[800px] rounded-md overflow-hidden">
+          <iframe
+            className="w-[600px] h-full bg-white flex items-center justify-center mx-auto"
+            src={`${clean}/embed`}
+          />
+        </FullscreenContainer>
+      );
+    }
+
+    //
+    // 6. X / Twitter
